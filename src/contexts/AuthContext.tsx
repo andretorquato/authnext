@@ -13,8 +13,9 @@ type SignInCredentials = {
   password: string;
 };
 
-type AuthContextData = {  
-  signIn(credentials: SignInCredentials): Promise<void>;
+type AuthContextData = {
+  signIn: (credentials: SignInCredentials) => Promise<void>;
+  signOut: () => void;
   isAuthenticated: boolean;
   user: User;
 };
@@ -24,9 +25,16 @@ type AuthProvider = {
 };
 export const AuthContext = createContext({} as AuthContextData);
 
-export function signOut(){
-  destroyCookie(undefined, 'nextauth.token');
-  destroyCookie(undefined, 'nextauth.refreshToken');
+let authChannel: BroadcastChannel;
+let isLogged: boolean = false;
+
+export function signOut() {
+  destroyCookie(undefined, "nextauth.token");
+  destroyCookie(undefined, "nextauth.refreshToken");
+
+  if(isLogged)
+  authChannel.postMessage("signOut");
+  isLogged = false;
 
   Router.push("/");
 }
@@ -35,23 +43,42 @@ export function AuthProvider({ children }: AuthProvider) {
   const [user, setUser] = useState<User>();
   const isAuthenticated = !!user;
 
-  useEffect(() =>{
-      const { 'nextauth.token': token } = parseCookies();
+  useEffect(() => {
+    authChannel = new BroadcastChannel("auth");
 
-      if(token){
-        apiClient.get('/me').then(response => {
+    authChannel.onmessage = (message) => {
+      switch (message.data) {
+        case "signOut":
+            signOut();
+          break;
+        case "signIn":
+            Router.reload();
+          break;
+        default:
+          break;
+      }
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const { "nextauth.token": token } = parseCookies();
+
+    if (token) {
+      apiClient
+        .get("/me")
+        .then((response) => {
           const { email, permissions, roles } = response.data;
           setUser({ email, permissions, roles });
-        }).catch(() => {
-          if(process.browser){
+        })
+        .catch(() => {
+          if (process.browser) {
             signOut();
           }
         });
-      }
+    }
   }, []);
 
   async function signIn({ email, password }: SignInCredentials) {
-    
     try {
       const response = await apiClient.post("/sessions", {
         email,
@@ -75,7 +102,11 @@ export function AuthProvider({ children }: AuthProvider) {
         roles,
       });
 
-      apiClient.defaults.headers['Authorization'] = `Bearer ${token}`;
+      apiClient.defaults.headers["Authorization"] = `Bearer ${token}`;
+
+      if(!isLogged)
+      authChannel.postMessage("signIn");
+      isLogged = true;
 
       Router.push("/dashboard");
     } catch (err) {
@@ -84,7 +115,7 @@ export function AuthProvider({ children }: AuthProvider) {
   }
 
   return (
-    <AuthContext.Provider value={{ signIn, isAuthenticated, user }}>
+    <AuthContext.Provider value={{ signIn, signOut, isAuthenticated, user }}>
       {children}
     </AuthContext.Provider>
   );
